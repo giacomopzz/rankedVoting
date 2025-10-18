@@ -1,0 +1,9 @@
+<?php
+include("utilities/useful.php");
+if(is_logged()){
+	include("home/home.php");
+}
+else{
+	include("home/welcome.php");
+}
+?>
