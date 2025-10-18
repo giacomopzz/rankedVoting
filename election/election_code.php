@@ -161,7 +161,7 @@
                 echo "invalid date<br>";
                 return -1;
             }
-            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `winner`) values (NULL, '".$escapedDate."', NULL)";
+            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `theme`, `winner`) values (NULL, '".$escapedDate."', NULL, NULL)";
             $success = mysqli_query($mysqli, $query);
             [$openElection, $latestDate] = get_open_election();
             return $openElection;

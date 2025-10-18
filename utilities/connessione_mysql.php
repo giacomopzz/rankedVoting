@@ -10,6 +10,7 @@
 	$db_options_table="votingOptions";
 	$db_elections_table="votingElections";
 	$db_ranks_table="votingRanks";
+	$db_aliases_table="votingAliases";
 	
 
 	//connection
