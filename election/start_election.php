@@ -19,7 +19,8 @@ require_once("../utilities/useful.php");
 			$date = date("Y-m-d");
 		else
 			$date = $_POST["date"];
-		$electionIdx = new_election($date);
+        $theme = isset($_POST["theme"]) ? $_POST["theme"] : null;
+		$electionIdx = new_election($date, $theme);
 	}
 	if(!$debug)
 		header("location: ".$location."index.php");

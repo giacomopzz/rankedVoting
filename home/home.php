@@ -101,6 +101,7 @@
 			else{
 				echo "<form action=\"election/start_election.php\" method=\"post\">";
 				echo "<input type=\"date\" name=\"date\"><br>";
+                echo "<label>Theme:</label><input type=\"text\" name=\"theme\"><br>";
 				echo "<input type=\"submit\" value=\"Start election\">";
 				echo "</form>";
 			}

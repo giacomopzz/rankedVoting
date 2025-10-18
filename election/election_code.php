@@ -147,8 +147,23 @@
         return $allOptions;
     }
 
+    function get_election_theme(){
+        global $mysqli;
+        global $db_elections_table;
+
+        $electionIdx = get_open_election()[0];
+        if($electionIdx == -1)
+            return null;
+        $query = "select `theme` from ".$db_elections_table." where electionIdx=".$electionIdx;
+        $result = mysqli_query($mysqli, $query);
+    	$row = mysqli_fetch_array($result);
+        if($row["theme"] == null)
+            return null;
+        return $row["theme"];
+    }
+
     /// admin methods
-    function new_election($date)
+    function new_election($date, $theme)
     {
         global $mysqli;
         global $db_elections_table;
@@ -161,7 +176,8 @@
                 echo "invalid date<br>";
                 return -1;
             }
-            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `theme`, `winner`) values (NULL, '".$escapedDate."', NULL, NULL)";
+            $escapedTheme = $theme === null ? null : mysqli_real_escape_string($mysqli, $theme);
+            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `theme`, `winner`) values (NULL, '".$escapedDate."', ".($escapedTheme === null ? "NULL" : "'".$escapedTheme."'").", NULL)";
             $success = mysqli_query($mysqli, $query);
             [$openElection, $latestDate] = get_open_election();
             return $openElection;
