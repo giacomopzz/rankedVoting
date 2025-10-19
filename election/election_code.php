@@ -132,17 +132,20 @@
         return $election;
     }
 
-    function get_all_candidates()
+    function get_all_candidates(int $electionIdx = -1)
     {
         global $mysqli;
         global $db_options_table;
+        global $db_aliases_table;
 
-        $query = "select `optionIdx`,`option` from ".$db_options_table." where true";
+        $query = "select o.`optionIdx`,o.`option`,a.`alias` from ".$db_options_table." as o left join (select `optionIdx`,`alias` from ".$db_aliases_table." where `electionIdx`=".$electionIdx.") as a on o.`optionIdx`=a.`optionIdx` where true";
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         $allOptions = array();
         foreach($rows as $option){
-            $allOptions[] = [intval($option["optionIdx"]), $option["option"]];
+            if($option["alias"] == null)
+                $option["alias"] = $option["option"];
+            $allOptions[] = [intval($option["optionIdx"]), $option["option"], $option["alias"]];
         }
         return $allOptions;
     }

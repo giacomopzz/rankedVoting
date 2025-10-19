@@ -5,4 +5,8 @@
     if($theme !== null){
         echo $theme;
     }
+    $options = get_all_candidates();
+    foreach($options as $option){
+        echo ";".$option[1];
+    }
 ?>
