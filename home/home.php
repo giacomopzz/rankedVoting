@@ -64,7 +64,7 @@
         echo "<br>Winner was ranked:<br>";
         for($rankIdx = 1; $rankIdx <= $maxOrder; $rankIdx++){
             $numVotersOfRank = isset($assignedOrder[$rankIdx]) ? $assignedOrder[$rankIdx] : 0;
-            echo $rankIdx.ordinalString($rankIdx)." by ".$numVotersOfRank." ".($numVotersOfRank == 1 ? "person" : "people")."<br>";
+            echo $rankIdx."".ordinalString($rankIdx)." by ".$numVotersOfRank." ".($numVotersOfRank == 1 ? "person" : "people")."<br>";
         }
         echo "vetoed by ".$vetoedNumber." ".($vetoedNumber == 1 ? "person" : "people")."<br>";
 
@@ -136,14 +136,20 @@
                 echo "</table>";
 
 				// Vote button
-				echo "<input type=\"hidden\" value=\"".$electionIdx."\" name=\"election_idx\">\n<input type=\"submit\" value=\"Vote\">";
-				echo "</form><br><br>";
+                $noVoteId = "op_no_vote";
+                $isChecked = $ballot->isNotComing();
+                echo "<br><label for=\"".$noVoteId."\">I'm not coming</label>";
+                echo "<input type=\"checkbox\" id=\"".$noVoteId."\" name=\"".$noVoteId."\"".($isChecked ? " checked" : "")." oninput=\"controlBallot(".count($options).");\"><br>";
+				echo "<br><input type=\"hidden\" value=\"".$electionIdx."\" name=\"election_idx\">\n<input type=\"submit\" value=\"Vote\">";
+				echo "</form>";
 
                 // Print ballot summary
-                echo "<div>";
-                echo count($ballot->votes) == 0 ? "You haven't voted yet." : "Your current ballot is:";
-                printBallotSummary($ballot, $options);
-                echo "</div>";
+                if(!$ballot->isNotComing()){
+                    echo "<br><br><div>";
+                    echo count($ballot->votes) == 0 ? "You haven't voted yet." : "Your current ballot is:";
+                    printBallotSummary($ballot, $options);
+                    echo "</div>";
+                }
 			}
 		}
 		else

@@ -54,12 +54,16 @@
 
     class Ballot {
         public $votes; // array of Vote with unique optionIdx and rank, sorted by ascending rank
+        private $notComing;
 
         function __construct(){
             $this->votes = array();
+            $this->notComing = false;
         }
 
         public function append(Vote $vote){
+            if($this->notComing)
+                return;
             // make sure that rank and optionIdx are unique
             if($vote->rank <= 0 && $vote->rank != -1) // only -1 is allowed as non-positive value
                 return;
@@ -100,6 +104,15 @@
             }
             return $ranked;
         }
+
+        public function setNotComing(){
+            $this->notComing = true;
+            $this->votes = [];
+        }
+
+        public function isNotComing(){
+            return $this->notComing;
+        }
     }
 
     function get_all_ballots(int $electionIdx) // This could be done by getting the unique users that voted and calling the get_previous_vote method, but that would make a lot of calls to the DB
@@ -110,7 +123,7 @@
         global $db_ranks_table;
 
         // collect votes
-        $query = "select r.userIdx,r.optionIdx,r.`rank` from ".$db_ranks_table." as r right join ".$db_options_table." as o on r.optionIdx=o.optionIdx where r.electionIdx=".$electionIdx;
+        $query = "select r.userIdx,r.optionIdx,r.`rank`,o.`option` from ".$db_ranks_table." as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx where r.electionIdx=".$electionIdx;
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         $choices = array();
@@ -121,6 +134,8 @@
             if(!isset($choices[$user])){
                 $choices[$user] = new Ballot();
             }
+            if($vote['option'] == null)
+                $choices[$user]->setNotComing();
             $newVote = new Vote($rank, $option);
             $choices[$user]->append($newVote);
         }
@@ -206,6 +221,8 @@
 
         // collect votes
         $election = get_all_ballots($electionIdx);
+        var_dump($election);
+        echo "<br>";
 
         // collect candidates
         $optionIds = array();
@@ -248,6 +265,7 @@
         }
 
         // Fill result matrix: $match[candidateA][candidateB] is 1 if majority prefers A over B, 1/2 if equal preferences, 0 otherwise
+        $anyoneVoted = false;
         $maxCopeland = -1;
         $vetoed = array();
         for($aIdx = 0; $aIdx < $nOptions; $aIdx++){
@@ -260,6 +278,10 @@
                 $scoreA = 0;
                 $scoreB = 0;
                 foreach($election as $ballot){
+                    if(!$anyoneVoted && $ballot->isNotComing())
+                        continue;
+                    else
+                        $anyoneVoted = true;
                     $rankA = $ballot->getRank($allOptions[$aIdx]); // rank can be -1, null or a positive integer
                     $rankB = $ballot->getRank($allOptions[$bIdx]);
                     if($rankA === $rankB){ // tie for user means either both vetoed or both unselected
@@ -295,6 +317,9 @@
                     else
                         $scoreA++;
                 }
+
+                if(!$anyoneVoted) // all voters selected the "not coming" option
+                    return -1;
 
                 // Apply winner penalty, it counts as one extra voter that ranked every option above the last winner
                 if($allOptions[$aIdx] == $previousWinner)
@@ -425,11 +450,15 @@
 
         clear_vote($electionIdx, $userIdx);
         $query = "insert into ".$db_ranks_table." (`userIdx`,`electionIdx`,`optionIdx`,`rank`) values ";
-        for($idx = 0; $idx < count($ballot->votes); $idx++){
-            $vote = $ballot->votes[$idx];
-            if($idx != 0)
-                $query = $query.", ";
-            $query = $query."(".$userIdx.",".$electionIdx.",".($vote->optionIdx).",".($vote->rank).")";
+        if($ballot->isNotComing())
+            $query = $query."(".$userIdx.",".$electionIdx.",-1,-1)";
+        else{
+            for($idx = 0; $idx < count($ballot->votes); $idx++){
+                $vote = $ballot->votes[$idx];
+                if($idx != 0)
+                    $query = $query.", ";
+                $query = $query."(".$userIdx.",".$electionIdx.",".($vote->optionIdx).",".($vote->rank).")";
+            }
         }
         $result = mysqli_query($mysqli, $query);
     }
@@ -455,6 +484,10 @@
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         foreach($rows as $vote){
             $option = $vote['optionIdx'];
+            if($option == -1){
+                $ballot->setNotComing();
+                break;
+            }
             $rank = $vote['rank']; // for now, assume rank is always > 0
             $vote = new Vote($rank, $option);
             $ballot->append($vote);

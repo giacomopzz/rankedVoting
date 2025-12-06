@@ -54,14 +54,21 @@ function controlBallot(numOptions){
 			selectedRanks[rIdx] |= isChecked;
 		}
 	}
+    let isNotComing = document.getElementById("op_no_vote").checked;
 
 	// disable/enable all rows and columns that have been selected
 	for(let rIdx = 0; rIdx <= numOptions; rIdx++){
 		for(let oIdx = 0; oIdx < numOptions; oIdx++){
 			let currentId = "op"+(oIdx+1)+"_"+(rIdx == numOptions ? "veto" : rIdx+1);
 			let checkbox = document.getElementById(currentId);
-			if(checkbox.checked)
+            if(isNotComing){
+    			checkbox.disabled = true;
+                continue;
+            }
+			if(checkbox.checked){
+                checkbox.disabled = false;
 				continue; // checked boxes are always enabled
+            }
 			let canCheck = !selectedOptions[oIdx] && (!selectedRanks[rIdx] || rIdx == numOptions);
 			checkbox.disabled = !canCheck;
 		}
