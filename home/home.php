@@ -15,7 +15,7 @@
 		</script>
     </head>
 	<?php
-	[$electionIdx, $electionDate] = get_open_election();
+	[$electionIdx, $electionDate, $seriesIdx, $seriesName] = get_open_election();
 	$options = get_all_candidates();
     echo "<body onload=\"initPage(".count($options).",".($electionIdx == -1 && $_SESSION['user_voter'] === "true" ? "'previous_election'": "'current_election'").");\">";
 	?>
@@ -29,53 +29,58 @@
 
 		echo "<div id=\"previous_election\" class=\"hiddable_control\">";
         echo "<h2>Previous election</h2>";
-		[$lastResult, $lastDate, $lastResultIdx, $lastElectionIdx] = get_latest_closed_election();
+		[$lastResult, $lastDate, $lastResultIdx, $lastElectionIdx] = get_latest_closed_election($seriesIdx);
 
         // Show last winner
-		echo "Last winner (on ".toDateFormat($lastDate)."): ";
-		echo ($lastResult == -1 ? "nothing" : $lastResult)."<br>";
+        if(!is_int($lastElectionIdx) || $lastElectionIdx < 0){
+            echo "No previous elections for ".$seriesName."<br>";
+        }
+        else{
+            echo "Last winner of ".$seriesName." (on ".toDateFormat($lastDate)."): ";
+            echo ($lastResult == -1 ? "nothing" : $lastResult)."<br>";
 
-        // Show election stats
-        $lastElection = get_all_ballots($lastElectionIdx);
-        $vetoedNumber = 0;
-        $assignedOrder = array();
-        $maxOrder = -1;
-        foreach($lastElection as $ballot){
-            $currentRank = 0;
-            foreach($ballot->votes as $vote){
-                if($vote->rank != -1)
-                    $currentRank++;
-                if($vote->optionIdx == $lastResultIdx){
-                    if($vote->rank == -1){
-                        $vetoedNumber++;
-                        $currentRank = -1;
+            // Show election stats
+            $lastElection = get_all_ballots($lastElectionIdx);
+            $vetoedNumber = 0;
+            $assignedOrder = array();
+            $maxOrder = -1;
+            foreach($lastElection as $ballot){
+                $currentRank = 0;
+                foreach($ballot->votes as $vote){
+                    if($vote->rank != -1)
+                        $currentRank++;
+                    if($vote->optionIdx == $lastResultIdx){
+                        if($vote->rank == -1){
+                            $vetoedNumber++;
+                            $currentRank = -1;
+                        }
+                        break;
                     }
-                    break;
                 }
+                if($currentRank == -1)
+                    continue;
+                if($maxOrder < $currentRank)
+                    $maxOrder = $currentRank;
+                if(!isset($assignedOrder[$currentRank]))
+                    $assignedOrder[$currentRank] = 0;
+                $assignedOrder[$currentRank]++;
             }
-            if($currentRank == -1)
-                continue;
-            if($maxOrder < $currentRank)
-                $maxOrder = $currentRank;
-            if(!isset($assignedOrder[$currentRank]))
-                $assignedOrder[$currentRank] = 0;
-            $assignedOrder[$currentRank]++;
-        }
-        echo "<br>Winner was ranked:<br>";
-        for($rankIdx = 1; $rankIdx <= $maxOrder; $rankIdx++){
-            $numVotersOfRank = isset($assignedOrder[$rankIdx]) ? $assignedOrder[$rankIdx] : 0;
-            echo $rankIdx."".ordinalString($rankIdx)." by ".$numVotersOfRank." ".($numVotersOfRank == 1 ? "person" : "people")."<br>";
-        }
-        echo "vetoed by ".$vetoedNumber." ".($vetoedNumber == 1 ? "person" : "people")."<br>";
+            echo "<br>Winner was ranked:<br>";
+            for($rankIdx = 1; $rankIdx <= $maxOrder; $rankIdx++){
+                $numVotersOfRank = isset($assignedOrder[$rankIdx]) ? $assignedOrder[$rankIdx] : 0;
+                echo $rankIdx."".ordinalString($rankIdx)." by ".$numVotersOfRank." ".($numVotersOfRank == 1 ? "person" : "people")."<br>";
+            }
+            echo "vetoed by ".$vetoedNumber." ".($vetoedNumber == 1 ? "person" : "people")."<br>";
 
-        // Show user's previous ballot
-        if($_SESSION['user_voter'] === "true")
-        {
-            $previousBallot = get_previous_vote($lastElectionIdx, intval($_SESSION['user_idx']));
-            echo "<br><div>";
-            echo count($previousBallot->votes) == 0 ? "You didn't vote." : "Your ballot was:";
-            printBallotSummary($previousBallot, $options, $lastResultIdx);
-            echo "</div>";
+            // Show user's previous ballot
+            if($_SESSION['user_voter'] === "true")
+            {
+                $previousBallot = get_previous_vote($lastElectionIdx, intval($_SESSION['user_idx']));
+                echo "<br><div>";
+                echo count($previousBallot->votes) == 0 ? "You didn't vote." : "Your ballot was:";
+                printBallotSummary($previousBallot, $options, $lastResultIdx);
+                echo "</div>";
+            }
         }
 		echo "</div>";
 
@@ -94,14 +99,20 @@
 					else if($idx == $nAlreadyVoted - 2)
 						$alreadyVotedText = $alreadyVotedText." and ";
 				}
-				echo "Users can vote for the election of ".toDateFormat($electionDate)."<br>";
+				echo "Users can vote for the ".$seriesName." election of ".toDateFormat($electionDate)."<br>";
 				echo ($nAlreadyVoted > 0 ? $alreadyVotedText : "Nobody has")." already voted<br>";
 				echo "<br><a href=\"".$location."election/close_election.php\">Close election</a>";
 			}
 			else{
 				echo "<form action=\"election/start_election.php\" method=\"post\">";
-				echo "<input type=\"date\" name=\"date\"><br>";
-                echo "<label>Theme:</label><input type=\"text\" name=\"theme\"><br>";
+				echo "<input type=\"date\" name=\"date\"><br><br>";
+                echo "<label for=\"series\">Session: </label>";
+                echo "<select name=\"series\">";
+                $series = get_all_series();
+                foreach($series as $s)
+                    echo "<option value=\"".$s[0]."\">".$s[1]."</option>";
+                echo "</select><br><br>";
+                echo "<label for=\"theme\">Theme: </label><input type=\"text\" name=\"theme\"><br><br>";
 				echo "<input type=\"submit\" value=\"Start election\">";
 				echo "</form>";
 			}
@@ -109,7 +120,7 @@
 		else if($_SESSION['user_voter'] === "true")
 		{
 			if($electionIdx != -1){
-				echo "You can vote for the election of ".toDateFormat($electionDate)."<br>";
+				echo "You can vote for the ".$seriesName." election of ".toDateFormat($electionDate)."<br>";
 				$ballot = get_previous_vote($electionIdx, intval($_SESSION['user_idx']));
 
 				echo "<form action=\"election/vote.php\" method=\"post\">";

@@ -14,7 +14,7 @@ require_once("../utilities/useful.php");
 	<?php
 
 	if(is_logged() && $_SESSION['user_admin']){
-		[$electionIdx, $electionDate] = get_open_election();
+		$electionIdx = get_open_election()[0];
 		if($electionIdx != -1)
 			close_election($electionIdx);
 	}

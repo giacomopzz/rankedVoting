@@ -19,8 +19,10 @@ require_once("../utilities/useful.php");
 			$date = date("Y-m-d");
 		else
 			$date = $_POST["date"];
+        $series = isset($_POST["series"]) ? intval($_POST["series"]) : -1;
+        $series = is_int($series) ? $series : -1;
         $theme = isset($_POST["theme"]) ? $_POST["theme"] : null;
-		$electionIdx = new_election($date, $theme);
+		$electionIdx = new_election($date, $series, $theme);
 	}
 	if(!$debug)
 		header("location: ".$location."index.php");

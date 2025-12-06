@@ -3,7 +3,7 @@
     include_once("../utilities/connessione_mysql.php");
 
     /// shared methods
-    function toDateFormat(string $db_date, $format='dS M Y'){
+    function toDateFormat(string $db_date, $format='D dS M Y'){
         return DateTime::createFromFormat('Y-m-d', $db_date)->format($format);
     }
 
@@ -11,9 +11,10 @@
     {
         global $mysqli;
         global $db_elections_table;
+        global $db_series_table;
         // an election is open if winner is null, there can be only one open election.
         // return open election id or -1 if not possible
-        $query = "select `electionIdx`,`date` from ".$db_elections_table." where `winner` is null order by `date` asc";
+        $query = "select e.`electionIdx`,e.`date`,e.`seriesIdx`,s.`seriesName` from ".$db_elections_table." as e join ".$db_series_table." as s on e.`seriesIdx`=s.`seriesIdx` where e.`winner` is null order by e.`date` asc";
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         $numRows = count($rows);
@@ -27,19 +28,20 @@
         }
         $idx = $numRows-1;
         // exactly one open election left
-        return [intval($rows[$idx]['electionIdx']), $rows[$idx]['date']];
+        return [intval($rows[$idx]['electionIdx']), $rows[$idx]['date'], intval($rows[$idx]['seriesIdx']), $rows[$idx]['seriesName']];
     }
 
-    function get_latest_closed_election(){
+    function get_latest_closed_election(int $seriesIdx = null ){
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
         // returns date and winning option of latest election. If no option could be selected, returns -1 instead of the winner
-        $query = "select e.date,e.winner,o.option,e.electionIdx from (select * from ".$db_elections_table." where `winner` is not null) as e left join ".$db_options_table." as o on e.winner=o.optionIdx order by e.date desc limit 1";
+        $query = "select e.date,e.winner,o.option,e.electionIdx from (select * from ".$db_elections_table." where `winner` is not null".($seriesIdx != null && is_int($seriesIdx) ? " and `seriesIdx`=".$seriesIdx : "").") as e left join ".$db_options_table." as o on e.winner=o.optionIdx order by e.date desc limit 1";
         $result = mysqli_query($mysqli, $query);
     	$row = mysqli_fetch_array($result);
-        // let's assume at least one election was done
-        return [$row['winner'] == -1 ? -1 : $row['option'], $row['date'], $row['winner'], $row['electionIdx']];
+        if($row == null)
+            return [-1, null, -1, -1];
+        return [intval($row['winner']) == -1 ? -1 : $row['option'], $row['date'], intval($row['winner']), intval($row['electionIdx'])];
     }
 
     class Vote {
@@ -180,14 +182,28 @@
         return $row["theme"];
     }
 
+    function get_all_series(){
+        global $mysqli;
+        global $db_series_table;
+
+        $query = "select `seriesIdx`,`seriesName` from ".$db_series_table." where true";
+        $result = mysqli_query($mysqli, $query);
+    	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
+        $allSeries = array();
+        foreach($rows as $series){
+            $allSeries[] = [intval($series["seriesIdx"]), $series["seriesName"]];
+        }
+        return $allSeries;
+    }
+
     /// admin methods
-    function new_election($date, $theme)
+    function new_election($date, $series, $theme)
     {
         global $mysqli;
         global $db_elections_table;
 
         // return new election id or -1 if another election is still running.
-        [$openElection, $latestDate] = get_open_election();
+        $openElection = get_open_election()[0];
         if($openElection == -1){
             $escapedDate = mysqli_real_escape_string($mysqli, $date);
             if(DateTime::createFromFormat('Y-m-d', $escapedDate) === false){
@@ -195,9 +211,9 @@
                 return -1;
             }
             $escapedTheme = $theme === null ? null : mysqli_real_escape_string($mysqli, $theme);
-            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `theme`, `winner`) values (NULL, '".$escapedDate."', ".($escapedTheme === null ? "NULL" : "'".$escapedTheme."'").", NULL)";
+            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `seriesIdx`, `theme`, `winner`) values (NULL, '".$escapedDate."', ".$series.", ".($escapedTheme === null ? "NULL" : "'".$escapedTheme."'").", NULL)";
             $success = mysqli_query($mysqli, $query);
-            [$openElection, $latestDate] = get_open_election();
+            $openElection = get_open_election()[0];
             return $openElection;
         }
         return -1;
@@ -219,10 +235,14 @@
             return;
         }
 
+        // find series of election to close
+        $query = "select seriesIdx from ".$db_elections_table." where electionIdx=".$electionIdx;
+        $result = mysqli_query($mysqli, $query);
+    	$row = mysqli_fetch_array($result);
+        $seriesIdx = $row["seriesIdx"];
+        
         // collect votes
         $election = get_all_ballots($electionIdx);
-        var_dump($election);
-        echo "<br>";
 
         // collect candidates
         $optionIds = array();
@@ -231,7 +251,7 @@
             $optionIds[] = $candidate[0];
 
         // collect latest winner
-        $lastWinner = get_latest_closed_election()[2];
+        $lastWinner = get_latest_closed_election($seriesIdx)[2];
 
         // find and store winner
         $winner = -1; // invalid winner by default
