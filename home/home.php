@@ -149,7 +149,7 @@
 				// Vote button
                 $noVoteId = "op_no_vote";
                 $isChecked = $ballot->isNotComing();
-                echo "<br><label for=\"".$noVoteId."\">I'm not coming</label>";
+                echo "<br><label for=\"".$noVoteId."\">I'm not coming / ordering</label>";
                 echo "<input type=\"checkbox\" id=\"".$noVoteId."\" name=\"".$noVoteId."\"".($isChecked ? " checked" : "")." oninput=\"controlBallot(".count($options).");\"><br>";
 				echo "<br><input type=\"hidden\" value=\"".$electionIdx."\" name=\"election_idx\">\n<input type=\"submit\" value=\"Vote\">";
 				echo "</form>";
@@ -172,7 +172,8 @@
         // Account control
         echo "<div id=\"account_actions\" class=\"hiddable_control\">";
         echo "<h2>Account</h2>";
-		echo "<a href=\"".$location."login/logout.php\">logout</a><br>";
+		echo "<button type=\"button\" onclick=\"redirect('".$location."login/logout.php')\" style=\"font-size: 40px;\">logout</button>";
+        echo "<br><br>";
 		echo "<a href=\"".$location."register/change_password_form.php\">change password</a><br>";
 		echo "<a href=\"".$location."delete/delete_form.php\">delete account</a><br>";
         echo "</div>";

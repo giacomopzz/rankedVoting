@@ -88,3 +88,7 @@ function initPage(numOptions,initialTab){
     showControl(initialTab);
     controlBallot(numOptions);
 }
+
+function redirect(address){
+    window.location.href = address;
+}
