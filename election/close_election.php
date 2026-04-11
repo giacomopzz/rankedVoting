@@ -12,7 +12,6 @@ require_once("../utilities/useful.php");
     </head>
     <body>
 	<?php
-
 	if(is_logged() && $_SESSION['user_admin']){
 		$electionIdx = get_open_election()[0];
 		if($electionIdx != -1)

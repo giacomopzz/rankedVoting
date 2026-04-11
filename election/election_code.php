@@ -35,13 +35,22 @@
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
+        global $db_results_table;
         // returns date and winning option of latest election. If no option could be selected, returns -1 instead of the winner
+        $scores = array();
         $query = "select e.date,e.winner,o.option,e.electionIdx from (select * from ".$db_elections_table." where `winner` is not null".($seriesIdx != null && is_int($seriesIdx) ? " and `seriesIdx`=".$seriesIdx : "").") as e left join ".$db_options_table." as o on e.winner=o.optionIdx order by e.date desc limit 1";
         $result = mysqli_query($mysqli, $query);
-    	$row = mysqli_fetch_array($result);
-        if($row == null)
-            return [-1, null, -1, -1];
-        return [intval($row['winner']) == -1 ? -1 : $row['option'], $row['date'], intval($row['winner']), intval($row['electionIdx'])];
+    	$lastElectionRow = mysqli_fetch_array($result);
+        if($lastElectionRow == null)
+            return [-1, null, -1, -1, $scores];
+        $lastElectionIdx = intval($lastElectionRow['electionIdx']);
+        $query = "select o.option,r.score from (select * from ".$db_results_table." where `electionIdx`=".$lastElectionIdx.") as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx order by r.score desc";
+        $result = mysqli_query($mysqli, $query);
+        $scoreRows = mysqli_fetch_all($result, MYSQLI_NUM);
+        for($idx = 0; $idx < count($scoreRows); $idx++){
+            $scores[] = ["option" => $scoreRows[$idx][0], "score" => $scoreRows[$idx][1]];
+        }
+        return [intval($lastElectionRow['winner']) == -1 ? -1 : $lastElectionRow['option'], $lastElectionRow['date'], intval($lastElectionRow['winner']), $lastElectionIdx, $scores];
     }
 
     class Vote {
@@ -223,6 +232,7 @@
     {
         global $mysqli;
         global $db_elections_table;
+        global $db_results_table;
         global $db_options_table;
         global $db_ranks_table;
 
@@ -255,23 +265,84 @@
 
         // find and store winner
         $winner = -1; // invalid winner by default
+        $scores = array();
         if(count($election) != 0 && count($optionIds) != 0)
-            $winner = evaluateWinner($election, $optionIds, $lastWinner, false);
+            $scores = evaluateScores($election, $optionIds, $lastWinner, false);
+        $winner = evaluateWinner($scores);
+
+        // save winner in the database
         $query = "update ".$db_elections_table." set `winner`='".$winner."' where `electionIdx`=".$electionIdx;
         $result = mysqli_query($mysqli, $query);
         if($winner > 0)
             echo "Winner: ".$candidates[array_search($winner,$optionIds)][1]."<br>";
         else
             echo "No winner :(<br>";
+
+        // save scores in the database
+        if(count($scores) == 0)
+            echo "No scores available<br>";
+        else{
+            echo "Scores:<br>";
+            {
+                // remove previous scores for same electionIdx
+                $query = "delete from `".$db_results_table."` where `electionIdx` = ".$electionIdx;
+                $result = mysqli_query($mysqli, $query);
+            }
+            $query = "insert into ".$db_results_table." (`electionIdx`, `optionIdx`, `score`) values ";
+            foreach($scores as $idx => $score){
+                $optionIdx = $score['optionIdx'];
+                $scoreValue = $score['score'];
+
+                // update query
+                $query = $query.($idx != 0 ? ", " : "")."(".$electionIdx.",".$optionIdx.",".$scoreValue.")";
+
+                // print results
+                foreach($candidates as $candidate){
+                    if($candidate[0] == $optionIdx){
+                        echo $candidate[2]." -> ".$scoreValue."<br>";
+                        break;
+                    }
+                }
+            }
+            $result = mysqli_query($mysqli, $query);
+        }
     }
 
-    function evaluateWinner($election, $allOptions, $previousWinner, $ignoreVetoes){
+    function evaluateWinner($scores){
+        /// $scores: array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
+        $nOptions = count($scores);
+        if($nOptions == 0)
+            return -1;
+
+        // Evaluate Copeland set (the set of all the options with the highest Copeland score)
+        $maxCopeland = $scores[0]["score"];
+        $copelandSet = array();
+        for($idx = 0; $idx < $nOptions; $idx++){
+            if($scores[$idx]["score"] == $maxCopeland)
+                $copelandSet[] = $scores[$idx]["optionIdx"];
+        }
+
+        // Select a winner from the Copeland set.
+        $nCopelandWinners = count($copelandSet);
+        if($nCopelandWinners == 1)
+            return $copelandSet[0]; // Only one possible winner
+        if($nCopelandWinners == 0)
+            return -1; // Quite impossible, but no winner just in case
+
+        // Select at random between multiple options
+        $randomSelection = random_int(0, $nCopelandWinners - 1); // inclusive for both ends
+        return $copelandSet[$randomSelection];
+    }
+
+    function evaluateScores($election, $allOptions, $previousWinner, $ignoreVetoes){
+        /// returns an array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
         /// $election: array of Ballots (each Ballot has an array of options and their ranks)
         /// $allOptions: array of option IDs (from the DB)
         /// $previousWinner: option ID of the latest winner
         /// $ignoreVetoes: whether to remove vetoed options or not
+
         if(count($election) == 0) // no one voted
-            return -1;
+            return array();
         
         // Generate result matrix
         $nOptions = count($allOptions);
@@ -298,15 +369,15 @@
                 $scoreA = 0;
                 $scoreB = 0;
                 foreach($election as $ballot){
-                    if(!$anyoneVoted && $ballot->isNotComing())
+                    if($ballot->isNotComing())
                         continue;
-                    else
-                        $anyoneVoted = true;
+                    $anyoneVoted |= true;
                     $rankA = $ballot->getRank($allOptions[$aIdx]); // rank can be -1, null or a positive integer
                     $rankB = $ballot->getRank($allOptions[$bIdx]);
                     if($rankA === $rankB){ // tie for user means either both vetoed or both unselected
                         continue;
                     }
+                    $userWeight = 1; // This could be changed based on the pity system
                     if($rankA === null || $rankB === null || $rankA <= 0 || $rankB <= 0){
                         if($rankA < 0)
                             $vetoed[$aIdx] = true;
@@ -314,32 +385,32 @@
                             $vetoed[$bIdx] = true;
 
                         if($rankA > 0){ // rankB is either null or negative -> A wins
-                            $scoreA++;
+                            $scoreA += $userWeight;
                             continue;
                         }
                         if($rankB > 0){ // rankA is either null or negative -> B wins
-                            $scoreB++;
+                            $scoreB += $userWeight;
                             continue;
                         }
                         // both rankA and rankB are null or negatives, but different
                         if($rankA === null){ // rankA is null and rankB is -1, null wins over -1
-                            $scoreA++;
+                            $scoreA += $userWeight;
                             continue;
                         }
                         if($rankB === null){ // rankB is null and rankA is -1, null wins over -1
-                            $scoreB++;
+                            $scoreB += $userWeight;
                             continue;
                         }
                     }
                     // both rankA and rankB are positive and different
                     if($rankA > $rankB)
-                        $scoreB++;
+                        $scoreB += $userWeight;
                     else
-                        $scoreA++;
+                        $scoreA += $userWeight;
                 }
 
                 if(!$anyoneVoted) // all voters selected the "not coming" option
-                    return -1;
+                    return array();
 
                 // Apply winner penalty, it counts as one extra voter that ranked every option above the last winner
                 if($allOptions[$aIdx] == $previousWinner)
@@ -371,75 +442,21 @@
 
         if($maxCopeland < 0){ // this can only happen if all options were vetoed
             if($ignoreVetoes)
-                return -1;
+                return array();
             else // try running the election again but ignoring vetoes
-                return evaluateWinner($election, $allOptions, $previousWinner, true);
+                return evaluateScores($election, $allOptions, $previousWinner, true);
         }
 
-        // Evaluate Copeland set
-        $copelandSet = array();
+        // Convert matches matrix into score array and sort by score
+        $scores = array();
         for($idx = 0; $idx < $nOptions; $idx++){
-            if($match[$idx][$nOptions] == $maxCopeland)
-                $copelandSet[$idx] = $idx; // yes, arrays in php are wonky, since the keys are effectively a set, I'm using them as such
+            $scores[] = ["optionIdx" => $allOptions[$idx], "score" => $match[$idx][$nOptions]];
         }
-
-        // Select a winner from the Copeland set. On ties, select at random
-        $nCopelandWinners = count($copelandSet);
-        if($nCopelandWinners == 0)
-            return -1;
-        $randomSelection = random_int(0, $nCopelandWinners - 1); // inclusive for both ends
-        foreach($copelandSet as $winnerIdx){
-            if($randomSelection == 0)
-                return $allOptions[$winnerIdx];
-            else
-                $randomSelection--;
-        }
-        return -1;
-    }
-
-    function evaluateSmithSet($match, $allOptions)
-    {
-        $nOptions = count($allOptions);
-        $maxCopeland = -1;
-        for($idx = 0; $idx < $nOptions; $idx++){
-            if($match[$idx][$nOptions] > $maxCopeland)
-                $maxCopeland = $match[$idx][$nOptions];
-        }
-
-        $smithSet = array();
-        $maxCopeland = -1;
-        for($idx = 0; $idx < $nOptions; $idx++){
-            $currentCopeland = $match[$idx][$nOptions];
-            if($currentCopeland > $maxCopeland){
-                $smithSet = array();
-                $maxCopeland = $currentCopeland;
-            }
-            if($currentCopeland == $maxCopeland)
-                $smithSet[$idx] = $idx; // yes, arrays in php are wonky, since the keys are effectively a set, I'm using them as such
-        }
-        while(true){
-            $toAdd = null;
-            foreach($smithSet as $smithWinner){
-                for($opponentIdx = 0; $opponentIdx < $nOptions; $opponentIdx++){
-                    if($smithWinner == $opponentIdx)
-                        continue;
-                    if($match[$smithWinner][$opponentIdx] != 1){
-                        $toAdd = $opponentIdx;
-                    }
-                    if(!isset($smithSet[$toAdd]))
-                        break; // new candidate is to be added to the set
-                    else
-                        $toAdd = null;
-                }
-                if($toAdd != null)
-                    break; // new candidate is to be added to the set
-            }
-            if($toAdd != null)
-                $smithSet[$toAdd] = $toAdd;
-            else
-                break; // no more candidates to add
-        }
-        return $smithSet;
+        usort($scores, function($a, $b){
+            return $b["score"] - $a["score"]; // decreasing order of score
+        });
+        
+        return $scores;
     }
 
     function get_already_voted($electionIdx)

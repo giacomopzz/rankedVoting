@@ -29,7 +29,7 @@
 
 		echo "<div id=\"previous_election\" class=\"hiddable_control\">";
         echo "<h2>Previous election</h2>";
-		[$lastResult, $lastDate, $lastResultIdx, $lastElectionIdx] = get_latest_closed_election($seriesIdx);
+		[$lastResult, $lastDate, $lastResultIdx, $lastElectionIdx, $scores] = get_latest_closed_election($seriesIdx);
 
         // Show last winner
         if(!is_int($lastElectionIdx) || $lastElectionIdx < 0){
@@ -71,6 +71,15 @@
                 echo $rankIdx."".ordinalString($rankIdx)." by ".$numVotersOfRank." ".($numVotersOfRank == 1 ? "person" : "people")."<br>";
             }
             echo "vetoed by ".$vetoedNumber." ".($vetoedNumber == 1 ? "person" : "people")."<br>";
+
+            // Show full ranking
+            echo "<br>General ranking:<br>";
+            echo "<table>";
+            echo "<tr><th>Option</th><th>Copeland Score</th></tr>";
+            foreach($scores as $score){
+                echo "<tr><td style=\"text-align: center;\">".$score["option"]."</td><td style=\"text-align: center;\">".$score["score"]."</td></tr>";
+            }
+            echo "</table><br>";
 
             // Show user's previous ballot
             if($_SESSION['user_voter'] === "true")

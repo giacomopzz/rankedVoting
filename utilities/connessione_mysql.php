@@ -12,6 +12,7 @@
 	$db_ranks_table="votingRanks";
 	$db_aliases_table="votingAliases";
     $db_series_table="votingSeries";
+    $db_results_table="votingResults";
 	
 
 	//connection
