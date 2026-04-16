@@ -66,10 +66,14 @@
     class Ballot {
         public $votes; // array of Vote with unique optionIdx and rank, sorted by ascending rank
         private $notComing;
+        private $userIdx;
+        private $pityScore;
 
-        function __construct(){
+        function __construct(int $userIdx, float $pityScore){
             $this->votes = array();
             $this->notComing = false;
+            $this->userIdx = $userIdx;
+            $this->pityScore = $pityScore;
         }
 
         public function append(Vote $vote){
@@ -98,10 +102,22 @@
             return null;
         }
 
+        public function getEffectiveRank(int $optionIdx){
+            // returns ranks ignoring empty spaces, vetoes are -1
+            $effectiveRank = 0;
+            foreach($this->votes as $v){
+                if($v->rank > 0)
+                    $effectiveRank++;
+                if($v->optionIdx == $optionIdx)
+                    return $v->rank < 0 ? -1 : $effectiveRank;
+            }
+            return $effectiveRank + 1;
+        }
+
         public function getVetoedOptions(){
             $vetoes = array();
             foreach($this->votes as $v){
-                if($v->rank == -1)
+                if($v->rank < 0)
                     $vetoes[] = $v->optionIdx;
             }
             return $vetoes;
@@ -124,6 +140,14 @@
         public function isNotComing(){
             return $this->notComing;
         }
+
+        public function getPityScore(){
+            return $this->pityScore;
+        }
+
+        public function getUserIdx(){
+            return $this->userIdx;
+        }
     }
 
     function get_all_ballots(int $electionIdx) // This could be done by getting the unique users that voted and calling the get_previous_vote method, but that would make a lot of calls to the DB
@@ -132,6 +156,16 @@
         global $db_elections_table;
         global $db_options_table;
         global $db_ranks_table;
+        global $db_user_table;
+
+        // get users' pity scores
+        $query = "select `userIdx`,`pityScore` from ".$db_user_table." where `roleIdx`=2";
+        $result = mysqli_query($mysqli, $query);
+    	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
+        $pityScores = array();
+        foreach($rows as $userPity){
+            $pityScores[intval($userPity["userIdx"])] = floatval($userPity["pityScore"]);
+        }
 
         // collect votes
         $query = "select r.userIdx,r.optionIdx,r.`rank`,o.`option` from ".$db_ranks_table." as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx where r.electionIdx=".$electionIdx;
@@ -143,7 +177,9 @@
             $option = $vote['optionIdx'];
             $rank = $vote['rank'];
             if(!isset($choices[$user])){
-                $choices[$user] = new Ballot();
+                if(!isset($pityScores[$user]))
+                    $pityScores[$user] = 0.0;
+                $choices[$user] = new Ballot($user, $pityScores[$user]);
             }
             if($vote['option'] == null)
                 $choices[$user]->setNotComing();
@@ -235,6 +271,7 @@
         global $db_results_table;
         global $db_options_table;
         global $db_ranks_table;
+        global $db_user_table;
 
         // collect votes, evaluate winner and store it
         $query = "select count(electionIdx) from ".$db_elections_table." where electionIdx=".$electionIdx." and winner is null";
@@ -306,21 +343,29 @@
             }
             $result = mysqli_query($mysqli, $query);
         }
+
+        // reset pity scores of users that had a deciding vote
+        $decidingUsers = getDecidingUsers($election, $optionIds, $lastWinner, $winner);
+        echo "deciding users:<br>";
+        var_dump($decidingUsers);
+        echo "<br>";
+
+        // update pity scores
+        $newPityScores = array();
+        foreach($election as $ballot){
+            $newScore = 0.0;
+            if(!in_array($ballot->getUserIdx(), $decidingUsers))
+                $newScore = evaluatePityScore($winner, $ballot, count($candidates));
+            $newPityScores[] = ["userIdx" => $ballot->getUserIdx(), "newScore" => $newScore];
+            echo "User ".$ballot->getUserIdx()."'s pity score from ".$ballot->getPityScore()." to ".$newScore."<br>";
+            $query = "update ".$db_user_table." set `pityScore`='".$newScore."' where `userIdx`=".$ballot->getUserIdx();
+            $result = mysqli_query($mysqli, $query);
+        }
     }
 
     function evaluateWinner($scores){
         /// $scores: array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
-        $nOptions = count($scores);
-        if($nOptions == 0)
-            return -1;
-
-        // Evaluate Copeland set (the set of all the options with the highest Copeland score)
-        $maxCopeland = $scores[0]["score"];
-        $copelandSet = array();
-        for($idx = 0; $idx < $nOptions; $idx++){
-            if($scores[$idx]["score"] == $maxCopeland)
-                $copelandSet[] = $scores[$idx]["optionIdx"];
-        }
+        $copelandSet = getCopelandSet($scores);
 
         // Select a winner from the Copeland set.
         $nCopelandWinners = count($copelandSet);
@@ -334,12 +379,30 @@
         return $copelandSet[$randomSelection];
     }
 
+    function getCopelandSet($scores){
+        /// $scores: array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
+        /// returns an array of optionIdx
+        $nOptions = count($scores);
+        if($nOptions == 0)
+            return -1;
+
+        // Evaluate Copeland set (the set of all the options with the highest Copeland score)
+        $maxCopeland = $scores[0]["score"];
+        $copelandSet = array();
+        for($idx = 0; $idx < $nOptions; $idx++){
+            if($scores[$idx]["score"] == $maxCopeland)
+                $copelandSet[] = $scores[$idx]["optionIdx"];
+        }
+        return $copelandSet;
+    }
+
     function evaluateScores($election, $allOptions, $previousWinner, $ignoreVetoes){
         /// returns an array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
         /// $election: array of Ballots (each Ballot has an array of options and their ranks)
         /// $allOptions: array of option IDs (from the DB)
         /// $previousWinner: option ID of the latest winner
         /// $ignoreVetoes: whether to remove vetoed options or not
+        global $applyPityScore;
 
         if(count($election) == 0) // no one voted
             return array();
@@ -377,7 +440,7 @@
                     if($rankA === $rankB){ // tie for user means either both vetoed or both unselected
                         continue;
                     }
-                    $userWeight = 1; // This could be changed based on the pity system
+                    $userWeight = 1 + ($applyPityScore ? $ballot->getPityScore() : 0);
                     if($rankA === null || $rankB === null || $rankA <= 0 || $rankB <= 0){
                         if($rankA < 0)
                             $vetoed[$aIdx] = true;
@@ -459,6 +522,77 @@
         return $scores;
     }
 
+    function getDecidingUsers($election, $allOptions, int $previousWinner, int $newWinner){
+        /// $election: array of Ballot
+        /// $allOptions: array of option IDs (from the DB)
+        /// $previousWinner: option ID of the latest winner
+        /// $newWinner: option ID of the current winner
+        /// returns an array of user IDs
+        /// A user is "deciding" if removing their vote (but keeping their vetos) results in a copeland set that does not contain the winning option.
+
+        $scores = evaluateScores($election, $allOptions, $previousWinner, false);
+        $originalCopelandSet = getCopelandSet($scores);
+        $decidingUsers = array();
+        foreach($election as $originalBallot){
+            if($originalBallot->isNotComing())
+                continue; // For sure a user that didn't vote was not deciding
+            $userIdx = $originalBallot->getUserIdx();
+
+            // check for tie if option that won is worse than others for user
+            $winnerRank = $originalBallot->getEffectiveRank($previousWinner);
+            foreach($originalCopelandSet as $alternative){
+                if($alternative != $previousWinner){
+                    $alternativeRank = $originalBallot->getEffectiveRank($alternative);
+                    if($alternativeRank > 0 && $alternativeRank < $winnerRank )
+                        continue;
+                }
+            }
+
+            // evaluate if removing the vote affects the result
+            $virtualElection = array();
+            foreach($election as $virtualBallot){
+                if($virtualBallot->getUserIdx() != $userIdx){
+                    $virtualElection[] = $virtualBallot;
+                    continue;
+                }
+                $emptyBallot = new Ballot($userIdx, $originalBallot->getPityScore());
+                $userVetos = $originalBallot->getVetoedOptions();
+                foreach($userVetos as $vetoIdx){
+                    $emptyBallot->append(new Vote(-1, $vetoIdx));
+                }
+                $virtualElection[] = $emptyBallot;
+            }
+            $scores = evaluateScores($virtualElection, $allOptions, $previousWinner, false);
+            $copelandSet = getCopelandSet($scores);
+            $winnerWasRemoved = true;
+            foreach($copelandSet as $potentialWinner){
+                if($potentialWinner == $newWinner){
+                    $winnerWasRemoved = false;
+                    break;
+                }
+            }
+            if($winnerWasRemoved)
+                $decidingUsers[] = $userIdx;
+        }
+
+        return $decidingUsers;
+    }
+
+    function evaluatePityScore(int $winnerIdx, Ballot $ballot, int $numOptions){
+        global $applyPityScore;
+        $minRank = 3; // highest rank that gets no score
+        $pityWeight = $applyPityScore ? 2.0 / 3 : 0.0; // weight given to the worst case scenario (the last voted option winning)
+        if($ballot->isNotComing())
+            return $ballot->getPityScore();
+        $effectiveRank = $ballot->getEffectiveRank($winnerIdx);
+        if($effectiveRank > 0 && $effectiveRank <= $minRank) // top ranking, no additional score
+            return $ballot->getPityScore();
+        if($effectiveRank < 0)
+            $effectiveRank = $numOptions * 1.5; // a vetoed option is below all others by a lot
+        $score = ($effectiveRank * $effectiveRank - $minRank * $minRank) / ($numOptions * $numOptions - $minRank * $minRank);
+        return $ballot->getPityScore() + $pityWeight * $score;
+    }
+
     function get_already_voted($electionIdx)
     {
         global $mysqli;
@@ -478,13 +612,14 @@
     }
 
     /// voter methods
-    function cast_vote(int $electionIdx, int $userIdx, Ballot $ballot)
+    function cast_vote(int $electionIdx, Ballot $ballot)
     {
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
         global $db_ranks_table;
 
+        $userIdx = $ballot->getUserIdx();
         clear_vote($electionIdx, $userIdx);
         $query = "insert into ".$db_ranks_table." (`userIdx`,`electionIdx`,`optionIdx`,`rank`) values ";
         if($ballot->isNotComing())
@@ -513,9 +648,15 @@
     {
         global $mysqli;
         global $db_ranks_table;
+        global $db_user_table;
+
+        // find user's pity score
+        $query = "select `pityScore` from ".$db_user_table." where userIdx=".$userIdx;
+        $result = mysqli_query($mysqli, $query);
+        $pityRow = mysqli_fetch_row($result);
 
         // returns a Ballot
-        $ballot = new Ballot();
+        $ballot = new Ballot($userIdx, floatval($pityRow[0]));
         $query = "select `optionIdx`,`rank` from ".$db_ranks_table." where electionIdx=".$electionIdx." and userIdx=".$userIdx;
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);

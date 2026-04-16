@@ -73,19 +73,22 @@
             echo "vetoed by ".$vetoedNumber." ".($vetoedNumber == 1 ? "person" : "people")."<br>";
 
             // Show full ranking
-            echo "<br>General ranking:<br>";
-            echo "<table>";
-            echo "<tr><th>Option</th><th>Copeland Score</th></tr>";
-            foreach($scores as $score){
-                echo "<tr><td style=\"text-align: center;\">".$score["option"]."</td><td style=\"text-align: center;\">".$score["score"]."</td></tr>";
+            if(count($scores) > 0){
+                echo "<br>General ranking:<br>";
+                echo "<table>";
+                echo "<tr><th>Option</th><th>Copeland Score</th></tr>";
+                foreach($scores as $score){
+                    echo "<tr><td style=\"text-align: center;\">".$score["option"]."</td><td style=\"text-align: center;\">".$score["score"]."</td></tr>";
+                }
+                echo "</table><br>";
             }
-            echo "</table><br>";
 
             // Show user's previous ballot
             if($_SESSION['user_voter'] === "true")
             {
                 $previousBallot = get_previous_vote($lastElectionIdx, intval($_SESSION['user_idx']));
                 echo "<br><div>";
+                echo "Your current pity score is ".$previousBallot->getPityScore()."<br>";
                 echo count($previousBallot->votes) == 0 ? "You didn't vote." : "Your ballot was:";
                 printBallotSummary($previousBallot, $options, $lastResultIdx);
                 echo "</div>";
@@ -131,6 +134,7 @@
 			if($electionIdx != -1){
 				echo "You can vote for the ".$seriesName." election of ".toDateFormat($electionDate)."<br>";
 				$ballot = get_previous_vote($electionIdx, intval($_SESSION['user_idx']));
+                echo "Your current pity score is ".$ballot->getPityScore()."<br>";
 
 				echo "<form action=\"election/vote.php\" method=\"post\">";
 
@@ -171,6 +175,9 @@
                     echo "</div>";
                 }
 			}
+            else{
+                echo "No open election at the moment.";
+            }
 		}
 		else
 		{

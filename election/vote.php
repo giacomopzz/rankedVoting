@@ -13,13 +13,13 @@ require_once("../utilities/useful.php");
     <body>
 	<?php
 
-	function get_ballot($postData)
+	function get_ballot($postData, $userIdx)
 	{
 		// contains an array of "op<candidateIdx>_<rank>" => "on" (basically, if isset is true, it is checked)
 		// rank is always from 1 to count($candidates)
 		// (candidateIdx - 1) is the index of the option, not optionIdx. $optionIdx = $candidates[$candidateIdx - 1][0]
 		$candidates = get_all_candidates();
-		$ballot = new Ballot();
+		$ballot = new Ballot($userIdx, 0.0);
         if(isset($postData["op_no_vote"]))
             $ballot->setNotComing();
         else{
@@ -43,8 +43,8 @@ require_once("../utilities/useful.php");
 	}
 
 	if(is_logged() && $_SESSION['user_voter'] === "true" && isset($_POST["election_idx"])){
-		$ballot = get_ballot($_POST);
-		cast_vote($_POST["election_idx"], $_SESSION["user_idx"], $ballot);
+		$ballot = get_ballot($_POST, $_SESSION["user_idx"]);
+		cast_vote($_POST["election_idx"], $ballot);
 	}
 	if(!$debug)
 		header("location: ".$location."index.php");
