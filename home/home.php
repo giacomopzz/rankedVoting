@@ -200,6 +200,7 @@
 		echo "<a href=\"".$location."homebrew/Equipment40K.html\">Equipment</a><br>";
 		echo "<a href=\"".$location."homebrew/Languages40K.html\">Languages</a><br>";
 		echo "<a href=\"".$location."homebrew/Trades40K.html\">Trades</a><br>";
+        echo "<a href=\"".$location."homebrew/statblock-generator/dnd-statblock.html\">Stat block generator</a><br>";
 		?>
     </body>
 </html>
