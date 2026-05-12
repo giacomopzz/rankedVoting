@@ -29,7 +29,9 @@
 
 		echo "<div id=\"previous_election\" class=\"hiddable_control\">";
         echo "<h2>Previous election</h2>";
-		[$lastResult, $lastDate, $lastResultIdx, $lastElectionIdx, $scores] = get_latest_closed_election($seriesIdx);
+		[$lastResult, $lastDate, $lastResultIdx, $lastElectionIdx, $scores] = get_latest_closed_election($seriesIdx, $electionIdx);
+        if($seriesIdx == -1) // no current election to copy the seriesIdx from
+            [$seriesIdx, $seriesName] = get_election_series($lastElectionIdx);
 
         // Show last winner
         if(!is_int($lastElectionIdx) || $lastElectionIdx < 0){
@@ -38,6 +40,17 @@
         else{
             echo "Last winner of ".$seriesName." (on ".toDateFormat($lastDate)."): ";
             echo ($lastResult == -1 ? "nothing" : $lastResult)."<br>";
+
+            // Show user's previous ballot
+            if($_SESSION['user_voter'] === "true")
+            {
+                $previousBallot = get_previous_vote($lastElectionIdx, intval($_SESSION['user_idx']));
+                echo "<br><div>";
+                echo "Your current pity score is ".$previousBallot->getPityScore()."<br>";
+                echo count($previousBallot->votes) == 0 ? "You didn't vote." : "Your ballot was:";
+                printBallotSummary($previousBallot, $options, $lastResultIdx);
+                echo "</div>";
+            }
 
             // Show election stats
             $lastElection = get_all_ballots($lastElectionIdx);
@@ -83,15 +96,38 @@
                 echo "</table><br>";
             }
 
-            // Show user's previous ballot
-            if($_SESSION['user_voter'] === "true")
-            {
-                $previousBallot = get_previous_vote($lastElectionIdx, intval($_SESSION['user_idx']));
-                echo "<br><div>";
-                echo "Your current pity score is ".$previousBallot->getPityScore()."<br>";
-                echo count($previousBallot->votes) == 0 ? "You didn't vote." : "Your ballot was:";
-                printBallotSummary($previousBallot, $options, $lastResultIdx);
-                echo "</div>";
+            // Show full ranking without pity
+            $lastElectionNoPity = [];
+            foreach($lastElection as $ballot){
+                $noPityBallot = new Ballot($ballot->getUserIdx(), 0); // clone the ballot but set all pity scores to 0
+                if($ballot->isNotComing()){
+                    $noPityBallot.setNotComing();
+                    $lastElectionNoPity[] = $noPityBallot;
+                    continue;
+                }
+                foreach($ballot->votes as $vote)
+                    $noPityBallot->append( new Vote($vote->rank, $vote->optionIdx) );
+                $lastElectionNoPity[] = $noPityBallot;
+            }
+            $previousWinner = get_latest_closed_election($seriesIdx, $lastElectionIdx)[2];
+            $optionIds = [];
+            foreach($options as $option)
+                $optionIds[] = $option[0];
+            $noPityScores = evaluateScores($lastElectionNoPity, $optionIds, $previousWinner, false);
+            if(count($noPityScores) > 0){
+                echo "<br>General ranking without pity system:<br>";
+                echo "<table>";
+                echo "<tr><th>Option</th><th>Copeland Score</th></tr>";
+                foreach($noPityScores as $score){
+                    $optionName = "";
+                    foreach($options as $option)
+                        if($option[0] == $score["optionIdx"]){
+                            $optionName = $option[2];
+                            break;
+                        }
+                    echo "<tr><td style=\"text-align: center;\">".$optionName."</td><td style=\"text-align: center;\">".$score["score"]."</td></tr>";
+                }
+                echo "</table><br>";
             }
         }
 		echo "</div>";

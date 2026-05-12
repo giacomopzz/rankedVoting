@@ -20,7 +20,7 @@
         $numRows = count($rows);
         if($numRows == 0){
             // no open elections
-            return [-1, null];
+            return [-1, null, -1, ""];
         }
         for($idx = 0; $idx < $numRows-1; $idx++){
             // close all the earlier elections
@@ -28,21 +28,26 @@
         }
         $idx = $numRows-1;
         // exactly one open election left
-        return [intval($rows[$idx]['electionIdx']), $rows[$idx]['date'], intval($rows[$idx]['seriesIdx']), $rows[$idx]['seriesName']];
+        return [
+            /* open electionIdx */ intval($rows[$idx]['electionIdx']),
+            /* date */ $rows[$idx]['date'],
+            /* seriesIdx */ intval($rows[$idx]['seriesIdx']),
+            /* series name */ $rows[$idx]['seriesName']
+            ];
     }
 
-    function get_latest_closed_election(int $seriesIdx = null ){
+    function get_latest_closed_election(int $seriesIdx = null, int $currentElectionIdx = null ){
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
         global $db_results_table;
         // returns date and winning option of latest election. If no option could be selected, returns -1 instead of the winner
         $scores = array();
-        $query = "select e.date,e.winner,o.option,e.electionIdx from (select * from ".$db_elections_table." where `winner` is not null".($seriesIdx != null && is_int($seriesIdx) ? " and `seriesIdx`=".$seriesIdx : "").") as e left join ".$db_options_table." as o on e.winner=o.optionIdx order by e.date desc limit 1";
+        $query = "select e.date,e.winner,o.option,e.electionIdx from (select * from ".$db_elections_table." where `winner` is not null".($seriesIdx != null && is_int($seriesIdx) && $seriesIdx > 0 ? " and `seriesIdx`=".$seriesIdx : "").($currentElectionIdx != null && is_int($currentElectionIdx) && $currentElectionIdx > 0 ? " and `electionIdx`<".$currentElectionIdx : "").") as e left join ".$db_options_table." as o on e.winner=o.optionIdx order by e.date desc limit 1";
         $result = mysqli_query($mysqli, $query);
     	$lastElectionRow = mysqli_fetch_array($result);
         if($lastElectionRow == null)
-            return [-1, null, -1, -1, $scores];
+            return [-1, null, -1, "", $scores];
         $lastElectionIdx = intval($lastElectionRow['electionIdx']);
         $query = "select o.option,r.score from (select * from ".$db_results_table." where `electionIdx`=".$lastElectionIdx.") as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx order by r.score desc";
         $result = mysqli_query($mysqli, $query);
@@ -50,7 +55,25 @@
         for($idx = 0; $idx < count($scoreRows); $idx++){
             $scores[] = ["option" => $scoreRows[$idx][0], "score" => $scoreRows[$idx][1]];
         }
-        return [intval($lastElectionRow['winner']) == -1 ? -1 : $lastElectionRow['option'], $lastElectionRow['date'], intval($lastElectionRow['winner']), $lastElectionIdx, $scores];
+        return [
+            /* winner option name */ intval($lastElectionRow['winner']) == -1 ? -1 : $lastElectionRow['option'],
+            /* date */ $lastElectionRow['date'],
+            /* winner optionIdx */ intval($lastElectionRow['winner']),
+            /* last electionIdx */ $lastElectionIdx,
+            /* pity scores */ $scores
+            ];
+    }
+
+    function get_election_series($electionIdx){
+        global $mysqli;
+        global $db_elections_table;
+        global $db_series_table;
+        $query = "select s.`seriesIdx`, s.`seriesName` from (select * from ".$db_elections_table." where `electionIdx`=".$electionIdx.") as e left join ".$db_series_table." as s on s.`seriesIdx`=e.`seriesIdx`";
+        $result = mysqli_query($mysqli, $query);
+    	$row = mysqli_fetch_array($result);
+        if($row == null)
+            return [-1, ""];
+        return [intval($row['seriesIdx']), $row['seriesName']];
     }
 
     class Vote {
@@ -590,7 +613,8 @@
         if($effectiveRank < 0)
             $effectiveRank = $numOptions * 1.5; // a vetoed option is below all others by a lot
         $score = ($effectiveRank * $effectiveRank - $minRank * $minRank) / ($numOptions * $numOptions - $minRank * $minRank);
-        return $ballot->getPityScore() + $pityWeight * $score;
+        $finalScore = $ballot->getPityScore() + $pityWeight * $score;
+        return round($finalScore, 3); // round to the 3rd decimal point
     }
 
     function get_already_voted($electionIdx)
