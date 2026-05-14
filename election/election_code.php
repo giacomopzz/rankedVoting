@@ -7,8 +7,7 @@
         return DateTime::createFromFormat('Y-m-d', $db_date)->format($format);
     }
 
-    function get_open_election()
-    {
+    function get_open_election(){
         global $mysqli;
         global $db_elections_table;
         global $db_series_table;
@@ -173,8 +172,8 @@
         }
     }
 
-    function get_all_ballots(int $electionIdx) // This could be done by getting the unique users that voted and calling the get_previous_vote method, but that would make a lot of calls to the DB
-    {
+    function get_all_ballots(int $electionIdx){
+        // This could be done by getting the unique users that voted and calling the get_previous_vote method, but that would make a lot of calls to the DB
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
@@ -217,8 +216,7 @@
         return $election;
     }
 
-    function get_all_candidates(int $electionIdx = -1)
-    {
+    function get_all_candidates(int $electionIdx = -1){
         global $mysqli;
         global $db_options_table;
         global $db_aliases_table;
@@ -265,8 +263,7 @@
     }
 
     /// admin methods
-    function new_election($date, $series, $theme)
-    {
+    function new_election($date, int $seriesIdx, string $theme){
         global $mysqli;
         global $db_elections_table;
 
@@ -279,7 +276,7 @@
                 return -1;
             }
             $escapedTheme = $theme === null ? null : mysqli_real_escape_string($mysqli, $theme);
-            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `seriesIdx`, `theme`, `winner`) values (NULL, '".$escapedDate."', ".$series.", ".($escapedTheme === null ? "NULL" : "'".$escapedTheme."'").", NULL)";
+            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `seriesIdx`, `theme`, `winner`) values (NULL, '".$escapedDate."', ".$seriesIdx.", ".($escapedTheme === null ? "NULL" : "'".$escapedTheme."'").", NULL)";
             $success = mysqli_query($mysqli, $query);
             $openElection = get_open_election()[0];
             return $openElection;
@@ -287,8 +284,15 @@
         return -1;
     }
 
-    function close_election(int $electionIdx)
-    {
+    function abort_election(int $electionIdx){
+        global $mysqli;
+        global $db_elections_table;
+
+        $query = "delete from ".$db_elections_table." where `electionIdx`=".$electionIdx;
+        $result = mysqli_query($mysqli, $query);
+    }
+
+    function close_election(int $electionIdx){
         global $mysqli;
         global $db_elections_table;
         global $db_results_table;
@@ -374,12 +378,10 @@
         echo "<br>";
 
         // update pity scores
-        $newPityScores = array();
         foreach($election as $ballot){
             $newScore = 0.0;
             if(!in_array($ballot->getUserIdx(), $decidingUsers))
                 $newScore = evaluatePityScore($winner, $ballot, count($candidates));
-            $newPityScores[] = ["userIdx" => $ballot->getUserIdx(), "newScore" => $newScore];
             echo "User ".$ballot->getUserIdx()."'s pity score from ".$ballot->getPityScore()." to ".$newScore."<br>";
             $query = "update ".$db_user_table." set `pityScore`='".$newScore."' where `userIdx`=".$ballot->getUserIdx();
             $result = mysqli_query($mysqli, $query);
@@ -617,8 +619,7 @@
         return round($finalScore, 3); // round to the 3rd decimal point
     }
 
-    function get_already_voted($electionIdx)
-    {
+    function get_already_voted(int $electionIdx){
         global $mysqli;
         global $db_ranks_table;
         global $db_user_table;
@@ -635,9 +636,18 @@
         return $list;
     }
 
+    function count_not_coming(int $electionIdx){
+        global $mysqli;
+        global $db_ranks_table;
+
+        $query = "select count( distinct `userIdx` ) from ".$db_ranks_table." where `electionIdx`=".$electionIdx." and `optionIdx`=-1";
+        $result = mysqli_query($mysqli, $query);
+        $row = mysqli_fetch_row($result);
+        return $row[0];
+    }
+
     /// voter methods
-    function cast_vote(int $electionIdx, Ballot $ballot)
-    {
+    function cast_vote(int $electionIdx, Ballot $ballot){
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
@@ -659,8 +669,7 @@
         $result = mysqli_query($mysqli, $query);
     }
 
-    function clear_vote(int $electionIdx, int $userIdx)
-    {
+    function clear_vote(int $electionIdx, int $userIdx){
         global $mysqli;
         global $db_ranks_table;
 
@@ -668,8 +677,7 @@
         $result = mysqli_query($mysqli, $query);
     }
 
-    function get_previous_vote(int $electionIdx, int $userIdx)
-    {
+    function get_previous_vote(int $electionIdx, int $userIdx){
         global $mysqli;
         global $db_ranks_table;
         global $db_user_table;

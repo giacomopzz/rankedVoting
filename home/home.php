@@ -139,6 +139,7 @@
 			if($electionIdx != -1){
 				$alreadyVoted = get_already_voted($electionIdx);
 				$nAlreadyVoted = count($alreadyVoted);
+                $nNotComing = count_not_coming($electionIdx);
 				$alreadyVotedText = "";
 				for($idx = 0; $idx < $nAlreadyVoted; $idx++){
 					$alreadyVotedText = $alreadyVotedText.$alreadyVoted[$idx];
@@ -150,6 +151,10 @@
 				echo "Users can vote for the ".$seriesName." election of ".toDateFormat($electionDate)."<br>";
 				echo ($nAlreadyVoted > 0 ? $alreadyVotedText : "Nobody has")." already voted<br>";
 				echo "<br><a href=\"".$location."election/close_election.php\">Close election</a>";
+                if($nAlreadyVoted - $nNotComing < 2){ // No votes or only one vote, so the election failed
+                    echo "<br>";
+                    echo "<br><a href=\"".$location."election/confirm_abort_election.php\">Abort election</a>";
+                }
 			}
 			else{
 				echo "<form action=\"election/start_election.php\" method=\"post\">";
