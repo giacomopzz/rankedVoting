@@ -101,7 +101,7 @@
             foreach($lastElection as $ballot){
                 $noPityBallot = new Ballot($ballot->getUserIdx(), 0); // clone the ballot but set all pity scores to 0
                 if($ballot->isNotComing()){
-                    $noPityBallot.setNotComing();
+                    $noPityBallot->setNotComing();
                     $lastElectionNoPity[] = $noPityBallot;
                     continue;
                 }
