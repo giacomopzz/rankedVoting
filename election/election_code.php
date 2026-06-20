@@ -48,11 +48,11 @@
         if($lastElectionRow == null)
             return [-1, null, -1, "", $scores];
         $lastElectionIdx = intval($lastElectionRow['electionIdx']);
-        $query = "select o.option,r.score from (select * from ".$db_results_table." where `electionIdx`=".$lastElectionIdx.") as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx order by r.score desc";
+        $query = "select o.option,r.score from (select * from ".$db_results_table." where `electionIdx`=".$lastElectionIdx.") as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx order by cast(r.score as float) desc";
         $result = mysqli_query($mysqli, $query);
         $scoreRows = mysqli_fetch_all($result, MYSQLI_NUM);
         for($idx = 0; $idx < count($scoreRows); $idx++){
-            $scores[] = ["option" => $scoreRows[$idx][0], "score" => $scoreRows[$idx][1]];
+            $scores[] = ["option" => $scoreRows[$idx][0], "score" => floatval($scoreRows[$idx][1])];
         }
         return [
             /* winner option name */ intval($lastElectionRow['winner']) == -1 ? -1 : $lastElectionRow['option'],
@@ -541,7 +541,8 @@
             $scores[] = ["optionIdx" => $allOptions[$idx], "score" => $match[$idx][$nOptions]];
         }
         usort($scores, function($a, $b){
-            return $b["score"] - $a["score"]; // decreasing order of score
+            $diff = $b["score"] - $a["score"]; // decreasing order of score
+            return $diff == 0 ? 0 : ($diff > 0 ? 1 : -1);
         });
         
         return $scores;

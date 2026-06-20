@@ -150,6 +150,7 @@
 				}
 				echo "Users can vote for the ".$seriesName." election of ".toDateFormat($electionDate)."<br>";
 				echo ($nAlreadyVoted > 0 ? $alreadyVotedText : "Nobody has")." already voted<br>";
+                echo $nNotComing." ".($nNotComing == 1 ? "person is" : "people are")." not coming/ordering.<br>";
 				echo "<br><a href=\"".$location."election/close_election.php\">Close election</a>";
                 if($nAlreadyVoted - $nNotComing < 2){ // No votes or only one vote, so the election failed
                     echo "<br>";
