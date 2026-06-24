@@ -3,23 +3,23 @@
     include_once("../utilities/connessione_mysql.php");
 
     /// shared methods
-    function toDateFormat(string $db_date, $format='dS M Y'){
+    function toDateFormat(string $db_date, $format='D dS M Y'){
         return DateTime::createFromFormat('Y-m-d', $db_date)->format($format);
     }
 
-    function get_open_election()
-    {
+    function get_open_election(){
         global $mysqli;
         global $db_elections_table;
+        global $db_series_table;
         // an election is open if winner is null, there can be only one open election.
         // return open election id or -1 if not possible
-        $query = "select `electionIdx`,`date` from ".$db_elections_table." where `winner` is null order by `date` asc";
+        $query = "select e.`electionIdx`,e.`date`,e.`seriesIdx`,s.`seriesName` from ".$db_elections_table." as e join ".$db_series_table." as s on e.`seriesIdx`=s.`seriesIdx` where e.`winner` is null order by e.`date` asc";
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         $numRows = count($rows);
         if($numRows == 0){
             // no open elections
-            return [-1, null];
+            return [-1, null, -1, ""];
         }
         for($idx = 0; $idx < $numRows-1; $idx++){
             // close all the earlier elections
@@ -27,19 +27,52 @@
         }
         $idx = $numRows-1;
         // exactly one open election left
-        return [intval($rows[$idx]['electionIdx']), $rows[$idx]['date']];
+        return [
+            /* open electionIdx */ intval($rows[$idx]['electionIdx']),
+            /* date */ $rows[$idx]['date'],
+            /* seriesIdx */ intval($rows[$idx]['seriesIdx']),
+            /* series name */ $rows[$idx]['seriesName']
+            ];
     }
 
-    function get_latest_closed_election(){
+    function get_latest_closed_election(int $seriesIdx = null, int $currentElectionIdx = null ){
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
+        global $db_results_table;
         // returns date and winning option of latest election. If no option could be selected, returns -1 instead of the winner
-        $query = "select e.date,e.winner,o.option,e.electionIdx from (select * from ".$db_elections_table." where `winner` is not null) as e left join ".$db_options_table." as o on e.winner=o.optionIdx order by e.date desc limit 1";
+        $scores = array();
+        $query = "select e.date,e.winner,o.option,e.electionIdx from (select * from ".$db_elections_table." where `winner` is not null".($seriesIdx != null && is_int($seriesIdx) && $seriesIdx > 0 ? " and `seriesIdx`=".$seriesIdx : "").($currentElectionIdx != null && is_int($currentElectionIdx) && $currentElectionIdx > 0 ? " and `electionIdx`<".$currentElectionIdx : "").") as e left join ".$db_options_table." as o on e.winner=o.optionIdx order by e.date desc limit 1";
+        $result = mysqli_query($mysqli, $query);
+    	$lastElectionRow = mysqli_fetch_array($result);
+        if($lastElectionRow == null)
+            return [-1, null, -1, "", $scores];
+        $lastElectionIdx = intval($lastElectionRow['electionIdx']);
+        $query = "select o.option,r.score from (select * from ".$db_results_table." where `electionIdx`=".$lastElectionIdx.") as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx order by cast(r.score as float) desc";
+        $result = mysqli_query($mysqli, $query);
+        $scoreRows = mysqli_fetch_all($result, MYSQLI_NUM);
+        for($idx = 0; $idx < count($scoreRows); $idx++){
+            $scores[] = ["option" => $scoreRows[$idx][0], "score" => floatval($scoreRows[$idx][1])];
+        }
+        return [
+            /* winner option name */ intval($lastElectionRow['winner']) == -1 ? -1 : $lastElectionRow['option'],
+            /* date */ $lastElectionRow['date'],
+            /* winner optionIdx */ intval($lastElectionRow['winner']),
+            /* last electionIdx */ $lastElectionIdx,
+            /* pity scores */ $scores
+            ];
+    }
+
+    function get_election_series($electionIdx){
+        global $mysqli;
+        global $db_elections_table;
+        global $db_series_table;
+        $query = "select s.`seriesIdx`, s.`seriesName` from (select * from ".$db_elections_table." where `electionIdx`=".$electionIdx.") as e left join ".$db_series_table." as s on s.`seriesIdx`=e.`seriesIdx`";
         $result = mysqli_query($mysqli, $query);
     	$row = mysqli_fetch_array($result);
-        // let's assume at least one election was done
-        return [$row['winner'] == -1 ? -1 : $row['option'], $row['date'], $row['winner'], $row['electionIdx']];
+        if($row == null)
+            return [-1, ""];
+        return [intval($row['seriesIdx']), $row['seriesName']];
     }
 
     class Vote {
@@ -54,12 +87,20 @@
 
     class Ballot {
         public $votes; // array of Vote with unique optionIdx and rank, sorted by ascending rank
+        private $notComing;
+        private $userIdx;
+        private $pityScore;
 
-        function __construct(){
+        function __construct(int $userIdx, float $pityScore){
             $this->votes = array();
+            $this->notComing = false;
+            $this->userIdx = $userIdx;
+            $this->pityScore = $pityScore;
         }
 
         public function append(Vote $vote){
+            if($this->notComing)
+                return;
             // make sure that rank and optionIdx are unique
             if($vote->rank <= 0 && $vote->rank != -1) // only -1 is allowed as non-positive value
                 return;
@@ -83,10 +124,22 @@
             return null;
         }
 
+        public function getEffectiveRank(int $optionIdx){
+            // returns ranks ignoring empty spaces, vetoes are -1
+            $effectiveRank = 0;
+            foreach($this->votes as $v){
+                if($v->rank > 0)
+                    $effectiveRank++;
+                if($v->optionIdx == $optionIdx)
+                    return $v->rank < 0 ? -1 : $effectiveRank;
+            }
+            return $effectiveRank + 1;
+        }
+
         public function getVetoedOptions(){
             $vetoes = array();
             foreach($this->votes as $v){
-                if($v->rank == -1)
+                if($v->rank < 0)
                     $vetoes[] = $v->optionIdx;
             }
             return $vetoes;
@@ -100,17 +153,44 @@
             }
             return $ranked;
         }
+
+        public function setNotComing(){
+            $this->notComing = true;
+            $this->votes = [];
+        }
+
+        public function isNotComing(){
+            return $this->notComing;
+        }
+
+        public function getPityScore(){
+            return $this->pityScore;
+        }
+
+        public function getUserIdx(){
+            return $this->userIdx;
+        }
     }
 
-    function get_all_ballots(int $electionIdx) // This could be done by getting the unique users that voted and calling the get_previous_vote method, but that would make a lot of calls to the DB
-    {
+    function get_all_ballots(int $electionIdx){
+        // This could be done by getting the unique users that voted and calling the get_previous_vote method, but that would make a lot of calls to the DB
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
         global $db_ranks_table;
+        global $db_user_table;
+
+        // get users' pity scores
+        $query = "select `userIdx`,`pityScore` from ".$db_user_table." where `roleIdx`=2";
+        $result = mysqli_query($mysqli, $query);
+    	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
+        $pityScores = array();
+        foreach($rows as $userPity){
+            $pityScores[intval($userPity["userIdx"])] = floatval($userPity["pityScore"]);
+        }
 
         // collect votes
-        $query = "select r.userIdx,r.optionIdx,r.`rank` from ".$db_ranks_table." as r right join ".$db_options_table." as o on r.optionIdx=o.optionIdx where r.electionIdx=".$electionIdx;
+        $query = "select r.userIdx,r.optionIdx,r.`rank`,o.`option` from ".$db_ranks_table." as r left join ".$db_options_table." as o on r.optionIdx=o.optionIdx where r.electionIdx=".$electionIdx;
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         $choices = array();
@@ -119,8 +199,12 @@
             $option = $vote['optionIdx'];
             $rank = $vote['rank'];
             if(!isset($choices[$user])){
-                $choices[$user] = new Ballot();
+                if(!isset($pityScores[$user]))
+                    $pityScores[$user] = 0.0;
+                $choices[$user] = new Ballot($user, $pityScores[$user]);
             }
+            if($vote['option'] == null)
+                $choices[$user]->setNotComing();
             $newVote = new Vote($rank, $option);
             $choices[$user]->append($newVote);
         }
@@ -132,49 +216,89 @@
         return $election;
     }
 
-    function get_all_candidates()
-    {
+    function get_all_candidates(int $electionIdx = -1){
         global $mysqli;
         global $db_options_table;
+        global $db_aliases_table;
 
-        $query = "select `optionIdx`,`option` from ".$db_options_table." where true";
+        $query = "select o.`optionIdx`,o.`option`,a.`alias` from ".$db_options_table." as o left join (select `optionIdx`,`alias` from ".$db_aliases_table." where `electionIdx`=".$electionIdx.") as a on o.`optionIdx`=a.`optionIdx` where true";
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         $allOptions = array();
         foreach($rows as $option){
-            $allOptions[] = [intval($option["optionIdx"]), $option["option"]];
+            if($option["alias"] == null)
+                $option["alias"] = $option["option"];
+            $allOptions[] = [intval($option["optionIdx"]), $option["option"], $option["alias"]];
         }
         return $allOptions;
     }
 
+    function get_election_theme(){
+        global $mysqli;
+        global $db_elections_table;
+
+        $electionIdx = get_open_election()[0];
+        if($electionIdx == -1)
+            return null;
+        $query = "select `theme` from ".$db_elections_table." where electionIdx=".$electionIdx;
+        $result = mysqli_query($mysqli, $query);
+    	$row = mysqli_fetch_array($result);
+        if($row["theme"] == null)
+            return null;
+        return $row["theme"];
+    }
+
+    function get_all_series(){
+        global $mysqli;
+        global $db_series_table;
+
+        $query = "select `seriesIdx`,`seriesName` from ".$db_series_table." where true";
+        $result = mysqli_query($mysqli, $query);
+    	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
+        $allSeries = array();
+        foreach($rows as $series){
+            $allSeries[] = [intval($series["seriesIdx"]), $series["seriesName"]];
+        }
+        return $allSeries;
+    }
+
     /// admin methods
-    function new_election($date)
-    {
+    function new_election($date, int $seriesIdx, string $theme){
         global $mysqli;
         global $db_elections_table;
 
         // return new election id or -1 if another election is still running.
-        [$openElection, $latestDate] = get_open_election();
+        $openElection = get_open_election()[0];
         if($openElection == -1){
             $escapedDate = mysqli_real_escape_string($mysqli, $date);
             if(DateTime::createFromFormat('Y-m-d', $escapedDate) === false){
                 echo "invalid date<br>";
                 return -1;
             }
-            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `theme`, `winner`) values (NULL, '".$escapedDate."', NULL, NULL)";
+            $escapedTheme = $theme === null ? null : mysqli_real_escape_string($mysqli, $theme);
+            $query = "insert into ".$db_elections_table." (`electionIdx`, `date`, `seriesIdx`, `theme`, `winner`) values (NULL, '".$escapedDate."', ".$seriesIdx.", ".($escapedTheme === null ? "NULL" : "'".$escapedTheme."'").", NULL)";
             $success = mysqli_query($mysqli, $query);
-            [$openElection, $latestDate] = get_open_election();
+            $openElection = get_open_election()[0];
             return $openElection;
         }
         return -1;
     }
 
-    function close_election(int $electionIdx)
-    {
+    function abort_election(int $electionIdx){
         global $mysqli;
         global $db_elections_table;
+
+        $query = "delete from ".$db_elections_table." where `electionIdx`=".$electionIdx;
+        $result = mysqli_query($mysqli, $query);
+    }
+
+    function close_election(int $electionIdx){
+        global $mysqli;
+        global $db_elections_table;
+        global $db_results_table;
         global $db_options_table;
         global $db_ranks_table;
+        global $db_user_table;
 
         // collect votes, evaluate winner and store it
         $query = "select count(electionIdx) from ".$db_elections_table." where electionIdx=".$electionIdx." and winner is null";
@@ -185,6 +309,12 @@
             return;
         }
 
+        // find series of election to close
+        $query = "select seriesIdx from ".$db_elections_table." where electionIdx=".$electionIdx;
+        $result = mysqli_query($mysqli, $query);
+    	$row = mysqli_fetch_array($result);
+        $seriesIdx = $row["seriesIdx"];
+        
         // collect votes
         $election = get_all_ballots($electionIdx);
 
@@ -195,27 +325,112 @@
             $optionIds[] = $candidate[0];
 
         // collect latest winner
-        $lastWinner = get_latest_closed_election()[2];
+        $lastWinner = get_latest_closed_election($seriesIdx)[2];
 
         // find and store winner
         $winner = -1; // invalid winner by default
+        $scores = array();
         if(count($election) != 0 && count($optionIds) != 0)
-            $winner = evaluateWinner($election, $optionIds, $lastWinner, false);
+            $scores = evaluateScores($election, $optionIds, $lastWinner, false);
+        $winner = evaluateWinner($scores);
+
+        // save winner in the database
         $query = "update ".$db_elections_table." set `winner`='".$winner."' where `electionIdx`=".$electionIdx;
         $result = mysqli_query($mysqli, $query);
         if($winner > 0)
             echo "Winner: ".$candidates[array_search($winner,$optionIds)][1]."<br>";
         else
             echo "No winner :(<br>";
+
+        // save scores in the database
+        if(count($scores) == 0)
+            echo "No scores available<br>";
+        else{
+            echo "Scores:<br>";
+            {
+                // remove previous scores for same electionIdx
+                $query = "delete from `".$db_results_table."` where `electionIdx` = ".$electionIdx;
+                $result = mysqli_query($mysqli, $query);
+            }
+            $query = "insert into ".$db_results_table." (`electionIdx`, `optionIdx`, `score`) values ";
+            foreach($scores as $idx => $score){
+                $optionIdx = $score['optionIdx'];
+                $scoreValue = $score['score'];
+
+                // update query
+                $query = $query.($idx != 0 ? ", " : "")."(".$electionIdx.",".$optionIdx.",".$scoreValue.")";
+
+                // print results
+                foreach($candidates as $candidate){
+                    if($candidate[0] == $optionIdx){
+                        echo $candidate[2]." -> ".$scoreValue."<br>";
+                        break;
+                    }
+                }
+            }
+            $result = mysqli_query($mysqli, $query);
+        }
+
+        // reset pity scores of users that had a deciding vote
+        $decidingUsers = getDecidingUsers($election, $optionIds, $lastWinner, $winner);
+        echo "deciding users:<br>";
+        var_dump($decidingUsers);
+        echo "<br>";
+
+        // update pity scores
+        foreach($election as $ballot){
+            $newScore = 0.0;
+            if(!in_array($ballot->getUserIdx(), $decidingUsers))
+                $newScore = evaluatePityScore($winner, $ballot, count($candidates));
+            echo "User ".$ballot->getUserIdx()."'s pity score from ".$ballot->getPityScore()." to ".$newScore."<br>";
+            $query = "update ".$db_user_table." set `pityScore`='".$newScore."' where `userIdx`=".$ballot->getUserIdx();
+            $result = mysqli_query($mysqli, $query);
+        }
     }
 
-    function evaluateWinner($election, $allOptions, $previousWinner, $ignoreVetoes){
+    function evaluateWinner($scores){
+        /// $scores: array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
+        $copelandSet = getCopelandSet($scores);
+
+        // Select a winner from the Copeland set.
+        $nCopelandWinners = count($copelandSet);
+        if($nCopelandWinners == 1)
+            return $copelandSet[0]; // Only one possible winner
+        if($nCopelandWinners == 0)
+            return -1; // Quite impossible, but no winner just in case
+
+        // Select at random between multiple options
+        $randomSelection = random_int(0, $nCopelandWinners - 1); // inclusive for both ends
+        return $copelandSet[$randomSelection];
+    }
+
+    function getCopelandSet($scores){
+        /// $scores: array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
+        /// returns an array of optionIdx
+        $nOptions = count($scores);
+        if($nOptions == 0)
+            return -1;
+
+        // Evaluate Copeland set (the set of all the options with the highest Copeland score)
+        $maxCopeland = $scores[0]["score"];
+        $copelandSet = array();
+        for($idx = 0; $idx < $nOptions; $idx++){
+            if($scores[$idx]["score"] == $maxCopeland)
+                $copelandSet[] = $scores[$idx]["optionIdx"];
+        }
+        return $copelandSet;
+    }
+
+    function evaluateScores($election, $allOptions, $previousWinner, $ignoreVetoes){
+        /// returns an array of ["optionIdx" => optionIdx, "score" => score] sorted on decreasing score
         /// $election: array of Ballots (each Ballot has an array of options and their ranks)
         /// $allOptions: array of option IDs (from the DB)
         /// $previousWinner: option ID of the latest winner
         /// $ignoreVetoes: whether to remove vetoed options or not
+        global $applyPityScore;
+
         if(count($election) == 0) // no one voted
-            return -1;
+            return array();
         
         // Generate result matrix
         $nOptions = count($allOptions);
@@ -229,6 +444,7 @@
         }
 
         // Fill result matrix: $match[candidateA][candidateB] is 1 if majority prefers A over B, 1/2 if equal preferences, 0 otherwise
+        $anyoneVoted = false;
         $maxCopeland = -1;
         $vetoed = array();
         for($aIdx = 0; $aIdx < $nOptions; $aIdx++){
@@ -241,11 +457,15 @@
                 $scoreA = 0;
                 $scoreB = 0;
                 foreach($election as $ballot){
+                    if($ballot->isNotComing())
+                        continue;
+                    $anyoneVoted |= true;
                     $rankA = $ballot->getRank($allOptions[$aIdx]); // rank can be -1, null or a positive integer
                     $rankB = $ballot->getRank($allOptions[$bIdx]);
                     if($rankA === $rankB){ // tie for user means either both vetoed or both unselected
                         continue;
                     }
+                    $userWeight = 1 + ($applyPityScore ? $ballot->getPityScore() : 0);
                     if($rankA === null || $rankB === null || $rankA <= 0 || $rankB <= 0){
                         if($rankA < 0)
                             $vetoed[$aIdx] = true;
@@ -253,29 +473,32 @@
                             $vetoed[$bIdx] = true;
 
                         if($rankA > 0){ // rankB is either null or negative -> A wins
-                            $scoreA++;
+                            $scoreA += $userWeight;
                             continue;
                         }
                         if($rankB > 0){ // rankA is either null or negative -> B wins
-                            $scoreB++;
+                            $scoreB += $userWeight;
                             continue;
                         }
                         // both rankA and rankB are null or negatives, but different
                         if($rankA === null){ // rankA is null and rankB is -1, null wins over -1
-                            $scoreA++;
+                            $scoreA += $userWeight;
                             continue;
                         }
                         if($rankB === null){ // rankB is null and rankA is -1, null wins over -1
-                            $scoreB++;
+                            $scoreB += $userWeight;
                             continue;
                         }
                     }
                     // both rankA and rankB are positive and different
                     if($rankA > $rankB)
-                        $scoreB++;
+                        $scoreB += $userWeight;
                     else
-                        $scoreA++;
+                        $scoreA += $userWeight;
                 }
+
+                if(!$anyoneVoted) // all voters selected the "not coming" option
+                    return array();
 
                 // Apply winner penalty, it counts as one extra voter that ranked every option above the last winner
                 if($allOptions[$aIdx] == $previousWinner)
@@ -307,79 +530,97 @@
 
         if($maxCopeland < 0){ // this can only happen if all options were vetoed
             if($ignoreVetoes)
-                return -1;
+                return array();
             else // try running the election again but ignoring vetoes
-                return evaluateWinner($election, $allOptions, $previousWinner, true);
+                return evaluateScores($election, $allOptions, $previousWinner, true);
         }
 
-        // Evaluate Copeland set
-        $copelandSet = array();
+        // Convert matches matrix into score array and sort by score
+        $scores = array();
         for($idx = 0; $idx < $nOptions; $idx++){
-            if($match[$idx][$nOptions] == $maxCopeland)
-                $copelandSet[$idx] = $idx; // yes, arrays in php are wonky, since the keys are effectively a set, I'm using them as such
+            $scores[] = ["optionIdx" => $allOptions[$idx], "score" => $match[$idx][$nOptions]];
         }
-
-        // Select a winner from the Copeland set. On ties, select at random
-        $nCopelandWinners = count($copelandSet);
-        if($nCopelandWinners == 0)
-            return -1;
-        $randomSelection = random_int(0, $nCopelandWinners - 1); // inclusive for both ends
-        foreach($copelandSet as $winnerIdx){
-            if($randomSelection == 0)
-                return $allOptions[$winnerIdx];
-            else
-                $randomSelection--;
-        }
-        return -1;
+        usort($scores, function($a, $b){
+            $diff = $b["score"] - $a["score"]; // decreasing order of score
+            return $diff == 0 ? 0 : ($diff > 0 ? 1 : -1);
+        });
+        
+        return $scores;
     }
 
-    function evaluateSmithSet($match, $allOptions)
-    {
-        $nOptions = count($allOptions);
-        $maxCopeland = -1;
-        for($idx = 0; $idx < $nOptions; $idx++){
-            if($match[$idx][$nOptions] > $maxCopeland)
-                $maxCopeland = $match[$idx][$nOptions];
-        }
+    function getDecidingUsers($election, $allOptions, int $previousWinner, int $newWinner){
+        /// $election: array of Ballot
+        /// $allOptions: array of option IDs (from the DB)
+        /// $previousWinner: option ID of the latest winner
+        /// $newWinner: option ID of the current winner
+        /// returns an array of user IDs
+        /// A user is "deciding" if removing their vote (but keeping their vetos) results in a copeland set that does not contain the winning option.
 
-        $smithSet = array();
-        $maxCopeland = -1;
-        for($idx = 0; $idx < $nOptions; $idx++){
-            $currentCopeland = $match[$idx][$nOptions];
-            if($currentCopeland > $maxCopeland){
-                $smithSet = array();
-                $maxCopeland = $currentCopeland;
-            }
-            if($currentCopeland == $maxCopeland)
-                $smithSet[$idx] = $idx; // yes, arrays in php are wonky, since the keys are effectively a set, I'm using them as such
-        }
-        while(true){
-            $toAdd = null;
-            foreach($smithSet as $smithWinner){
-                for($opponentIdx = 0; $opponentIdx < $nOptions; $opponentIdx++){
-                    if($smithWinner == $opponentIdx)
+        $scores = evaluateScores($election, $allOptions, $previousWinner, false);
+        $originalCopelandSet = getCopelandSet($scores);
+        $decidingUsers = array();
+        foreach($election as $originalBallot){
+            if($originalBallot->isNotComing())
+                continue; // For sure a user that didn't vote was not deciding
+            $userIdx = $originalBallot->getUserIdx();
+
+            // check for tie if option that won is worse than others for user
+            $winnerRank = $originalBallot->getEffectiveRank($previousWinner);
+            foreach($originalCopelandSet as $alternative){
+                if($alternative != $previousWinner){
+                    $alternativeRank = $originalBallot->getEffectiveRank($alternative);
+                    if($alternativeRank > 0 && $alternativeRank < $winnerRank )
                         continue;
-                    if($match[$smithWinner][$opponentIdx] != 1){
-                        $toAdd = $opponentIdx;
-                    }
-                    if(!isset($smithSet[$toAdd]))
-                        break; // new candidate is to be added to the set
-                    else
-                        $toAdd = null;
                 }
-                if($toAdd != null)
-                    break; // new candidate is to be added to the set
             }
-            if($toAdd != null)
-                $smithSet[$toAdd] = $toAdd;
-            else
-                break; // no more candidates to add
+
+            // evaluate if removing the vote affects the result
+            $virtualElection = array();
+            foreach($election as $virtualBallot){
+                if($virtualBallot->getUserIdx() != $userIdx){
+                    $virtualElection[] = $virtualBallot;
+                    continue;
+                }
+                $emptyBallot = new Ballot($userIdx, $originalBallot->getPityScore());
+                $userVetos = $originalBallot->getVetoedOptions();
+                foreach($userVetos as $vetoIdx){
+                    $emptyBallot->append(new Vote(-1, $vetoIdx));
+                }
+                $virtualElection[] = $emptyBallot;
+            }
+            $scores = evaluateScores($virtualElection, $allOptions, $previousWinner, false);
+            $copelandSet = getCopelandSet($scores);
+            $winnerWasRemoved = true;
+            foreach($copelandSet as $potentialWinner){
+                if($potentialWinner == $newWinner){
+                    $winnerWasRemoved = false;
+                    break;
+                }
+            }
+            if($winnerWasRemoved)
+                $decidingUsers[] = $userIdx;
         }
-        return $smithSet;
+
+        return $decidingUsers;
     }
 
-    function get_already_voted($electionIdx)
-    {
+    function evaluatePityScore(int $winnerIdx, Ballot $ballot, int $numOptions){
+        global $applyPityScore;
+        $minRank = 3; // highest rank that gets no score
+        $pityWeight = $applyPityScore ? 2.0 / 3 : 0.0; // weight given to the worst case scenario (the last voted option winning)
+        if($ballot->isNotComing())
+            return $ballot->getPityScore();
+        $effectiveRank = $ballot->getEffectiveRank($winnerIdx);
+        if($effectiveRank > 0 && $effectiveRank <= $minRank) // top ranking, no additional score
+            return $ballot->getPityScore();
+        if($effectiveRank < 0)
+            $effectiveRank = $numOptions * 1.5; // a vetoed option is below all others by a lot
+        $score = ($effectiveRank * $effectiveRank - $minRank * $minRank) / ($numOptions * $numOptions - $minRank * $minRank);
+        $finalScore = $ballot->getPityScore() + $pityWeight * $score;
+        return round($finalScore, 3); // round to the 3rd decimal point
+    }
+
+    function get_already_voted(int $electionIdx){
         global $mysqli;
         global $db_ranks_table;
         global $db_user_table;
@@ -396,27 +637,40 @@
         return $list;
     }
 
+    function count_not_coming(int $electionIdx){
+        global $mysqli;
+        global $db_ranks_table;
+
+        $query = "select count( distinct `userIdx` ) from ".$db_ranks_table." where `electionIdx`=".$electionIdx." and `optionIdx`=-1";
+        $result = mysqli_query($mysqli, $query);
+        $row = mysqli_fetch_row($result);
+        return $row[0];
+    }
+
     /// voter methods
-    function cast_vote(int $electionIdx, int $userIdx, Ballot $ballot)
-    {
+    function cast_vote(int $electionIdx, Ballot $ballot){
         global $mysqli;
         global $db_elections_table;
         global $db_options_table;
         global $db_ranks_table;
 
+        $userIdx = $ballot->getUserIdx();
         clear_vote($electionIdx, $userIdx);
         $query = "insert into ".$db_ranks_table." (`userIdx`,`electionIdx`,`optionIdx`,`rank`) values ";
-        for($idx = 0; $idx < count($ballot->votes); $idx++){
-            $vote = $ballot->votes[$idx];
-            if($idx != 0)
-                $query = $query.", ";
-            $query = $query."(".$userIdx.",".$electionIdx.",".($vote->optionIdx).",".($vote->rank).")";
+        if($ballot->isNotComing())
+            $query = $query."(".$userIdx.",".$electionIdx.",-1,-1)";
+        else{
+            for($idx = 0; $idx < count($ballot->votes); $idx++){
+                $vote = $ballot->votes[$idx];
+                if($idx != 0)
+                    $query = $query.", ";
+                $query = $query."(".$userIdx.",".$electionIdx.",".($vote->optionIdx).",".($vote->rank).")";
+            }
         }
         $result = mysqli_query($mysqli, $query);
     }
 
-    function clear_vote(int $electionIdx, int $userIdx)
-    {
+    function clear_vote(int $electionIdx, int $userIdx){
         global $mysqli;
         global $db_ranks_table;
 
@@ -424,18 +678,27 @@
         $result = mysqli_query($mysqli, $query);
     }
 
-    function get_previous_vote(int $electionIdx, int $userIdx)
-    {
+    function get_previous_vote(int $electionIdx, int $userIdx){
         global $mysqli;
         global $db_ranks_table;
+        global $db_user_table;
+
+        // find user's pity score
+        $query = "select `pityScore` from ".$db_user_table." where userIdx=".$userIdx;
+        $result = mysqli_query($mysqli, $query);
+        $pityRow = mysqli_fetch_row($result);
 
         // returns a Ballot
-        $ballot = new Ballot();
+        $ballot = new Ballot($userIdx, floatval($pityRow[0]));
         $query = "select `optionIdx`,`rank` from ".$db_ranks_table." where electionIdx=".$electionIdx." and userIdx=".$userIdx;
         $result = mysqli_query($mysqli, $query);
     	$rows = mysqli_fetch_all($result, MYSQLI_ASSOC);
         foreach($rows as $vote){
             $option = $vote['optionIdx'];
+            if($option == -1){
+                $ballot->setNotComing();
+                break;
+            }
             $rank = $vote['rank']; // for now, assume rank is always > 0
             $vote = new Vote($rank, $option);
             $ballot->append($vote);

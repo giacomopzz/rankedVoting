@@ -38,7 +38,7 @@ setcookie('user_idx',0,0,"/");
 			echo " checked";
 		}
 		echo "> Remember me<br>";
-		echo "<input type=\"submit\" value=\"login\">";
+		echo "<input type=\"submit\" value=\"login\" style=\"font-size: 20px;\">";
 		echo "</form><br>";
 	}
 	else{	
@@ -78,7 +78,7 @@ setcookie('user_idx',0,0,"/");
 			echo "<a href=\"".$location."login/login_form.php\">try again</a>";
 		}
 	}
-	echo "\t<a href=\"".$location."index.php\">home</a>";
+	echo "<br><a href=\"".$location."index.php\">home</a>";
 	?>
     </body>
 </html>

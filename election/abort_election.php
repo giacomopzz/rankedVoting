@@ -12,17 +12,10 @@ require_once("../utilities/useful.php");
     </head>
     <body>
 	<?php
-
 	if(is_logged() && $_SESSION['user_admin']){
-		$date;
-		if(!isset($_POST["date"]) || DateTime::createFromFormat('Y-m-d', $_POST["date"]) === false)
-			$date = date("Y-m-d");
-		else
-			$date = $_POST["date"];
-        $series = isset($_POST["series"]) ? intval($_POST["series"]) : -1;
-        $series = is_int($series) ? $series : -1;
-        $theme = isset($_POST["theme"]) ? $_POST["theme"] : null;
-		$electionIdx = new_election($date, $series, $theme);
+		$electionIdx = get_open_election()[0];
+		if($electionIdx != -1)
+			abort_election($electionIdx);
 	}
 	if(!$debug)
 		header("location: ".$location."index.php");
