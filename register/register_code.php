@@ -9,15 +9,15 @@ function register($user,$password){
 		echo "<br>invalid username, please choose another one.<br>";
 		return [-1, ""];
     }
-	$query="select count(username) from ".$db_user_table." where user='".$user."'";
+	$query="select count(username) from ".$db_user_table." where username='".$user."'";
 	$result_user=mysqli_query($mysqli, $query);
 	$row_user=mysqli_fetch_array($result_user);
-	if($row_user['count(username)']!=0){
+    if($row_user['count(username)']!=0){
 		echo "username already in use, please choose another one.<br>";
 		return [-1, ""];
 	}
 	else{
-		$query="insert into ".$db_user_table." (username,password) values('".$user."','".$password."')";
+        $query="insert into ".$db_user_table." (username,password) values('".$user."','".$password."')";
 		$result_add=mysqli_query($mysqli, $query);
 		if($result_add){
 			$query="select u.userIdx, r.role from ".$db_user_table." as u inner join ".$db_user_roles_table." as r on u.roleIdx=r.roleIdx where username='".$user."'";
